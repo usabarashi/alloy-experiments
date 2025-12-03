@@ -1,0 +1,86 @@
+name: Release Workflow
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+
+      - name: Cache Nix store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/nix
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      - name: Run model checks
+        working-directory: models/review-workflow
+        run: nix develop --command make test
+
+      - name: Generate state transition diagram
+        working-directory: models/review-workflow
+        run: nix develop --command make diagram
+
+      - name: Generate example traces
+        working-directory: models/review-workflow
+        run: nix develop --command make trace
+
+      - name: Determine release metadata
+        id: release_meta
+        run: |
+          timestamp="$(date -u +"%y%m%d-%H%M%S")"
+          tag="release-${timestamp}"
+          name="Automated release ${timestamp}"
+          notes="Automated release for commit ${GITHUB_SHA} at ${timestamp} UTC"
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_name=$name" >> "$GITHUB_OUTPUT"
+          printf 'release_notes<<EOF\n%s\nEOF\n' "$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.release_meta.outputs.tag_name }}" >/dev/null 2>&1; then
+            gh release edit "${{ steps.release_meta.outputs.tag_name }}" \
+              --title "${{ steps.release_meta.outputs.release_name }}" \
+              --notes "${{ steps.release_meta.outputs.release_notes }}" \
+              --latest
+          else
+            gh release create "${{ steps.release_meta.outputs.tag_name }}" \
+              --title "${{ steps.release_meta.outputs.release_name }}" \
+              --notes "${{ steps.release_meta.outputs.release_notes }}" \
+              --target "${GITHUB_SHA}" \
+              --latest
+          fi
+
+      - name: Upload diagram asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.release_meta.outputs.tag_name }}" \
+            "models/review-workflow/diagram.svg#diagram-${{ steps.release_meta.outputs.tag_name }}.svg" \
+            --clobber
+
+      - name: Upload traces asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.release_meta.outputs.tag_name }}" \
+            "models/review-workflow/traces.md#traces-${{ steps.release_meta.outputs.tag_name }}.md" \
+            --clobber
