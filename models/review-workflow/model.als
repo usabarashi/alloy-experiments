@@ -1,7 +1,7 @@
 /**
  * ReviewWorkflow Model
  * --------------------
- * A domain-neutral Alloy 6 specification capturing the techniques explained in Blog.md:
+ * A domain-neutral Alloy 6 specification capturing the techniques summarized below:
  *   - signatures and signature hierarchies for roles, statuses, and events
  *   - predicates describing guarded transitions with frame conditions
  *   - temporal facts enforcing invariants over traces (always ...)
