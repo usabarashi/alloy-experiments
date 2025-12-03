@@ -1,0 +1,51 @@
+name: Review Workflow Test
+
+on:
+  pull_request:
+    paths:
+      - 'models/review-workflow/**'
+      - '.github/workflows/review-workflow-model.yaml'
+      - 'flake.nix'
+      - 'flake.lock'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@c5a866b6ab867e88becbed4467b93592bce69f8a # v21
+
+      - name: Cache Nix store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/nix
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      - name: Run model checks
+        working-directory: models/review-workflow
+        run: nix develop --command make test
+
+      - name: Generate state transition diagram
+        working-directory: models/review-workflow
+        run: nix develop --command make diagram
+
+      - name: Generate example traces
+        working-directory: models/review-workflow
+        run: nix develop --command make trace
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always()
+        with:
+          name: verification-results
+          path: |
+            models/review-workflow/diagram.svg
+            models/review-workflow/traces.md
+          retention-days: 30
