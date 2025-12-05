@@ -50,7 +50,8 @@ render_table() {
   local level=$2
   local rows=$3
   local heading
-  heading=$(printf '%*s' "$level" '' | tr ' ' '#')
+  printf -v heading '%*s' "$level" ''
+  heading=${heading// /#}
   {
     printf "%s %s\n" "$heading" "$title"
     echo
@@ -107,14 +108,14 @@ execute_check() {
   if ! alloy6 exec -c "$idx" -o "$tmpdir" -t json "$MODEL" > /dev/null 2>&1; then
     echo "    ✗ Failed to execute $name" >&2
     rm -rf "$tmpdir"
-    return 1
+    return
   fi
   local solution_count
   solution_count=$(jq -r --arg cmd "$name" '(.commands[$cmd].solution // []) | length' "$tmpdir/receipt.json")
   if [[ $solution_count -eq 0 ]]; then
     rm -rf "$tmpdir"
     echo "    ✓ No counterexample found"
-    return 0
+    return
   fi
   local rows
   rows=$(extract_rows "$tmpdir/receipt.json" "$name")
@@ -122,7 +123,6 @@ execute_check() {
   counterexamples_written=1
   render_table "$name" 3 "$rows"
   echo "    → Counterexample appended to markdown"
-  return 0
 }
 
 RUN_CMDS=()
@@ -158,11 +158,7 @@ if [[ ${#CHECK_CMDS[@]} -gt 0 ]]; then
   counterexamples_written=0
   for entry in "${CHECK_CMDS[@]}"; do
     IFS=: read -r idx name <<< "$entry"
-    if execute_check "$idx" "$name"; then
-      if [[ -f "$tmpfile" ]]; then
-        counterexamples_written=1
-      fi
-    fi
+    execute_check "$idx" "$name"
   done
   if [[ $counterexamples_written -eq 0 ]]; then
     {
