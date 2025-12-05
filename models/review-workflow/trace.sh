@@ -45,16 +45,89 @@ extract_rows() {
     ' "$receipt"
 }
 
+render_table() {
+  local title=$1
+  local level=$2
+  local rows=$3
+  local heading
+  printf -v heading '%*s' "$level" ''
+  heading=${heading// /#}
+  {
+    printf "%s %s\n" "$heading" "$title"
+    echo
+    echo "| Step | Status | Event | Assigned To |"
+    echo "|------|--------|-------|-------------|"
+    if [[ -n "$rows" ]]; then
+      printf "%s\n" "$rows"
+    else
+      echo "| - | - | - | - |"
+    fi
+    echo
+  } >> "$tmpfile"
+}
+
+collect_commands() {
+  while read -r idx token kind name _; do
+    idx=${idx%.}
+    [[ $idx =~ ^[0-9]+$ ]] || continue
+    local actual_kind=$kind
+    local actual_name=$name
+    if [[ "$token" != "." ]]; then
+      actual_kind=$token
+      actual_name=$kind
+    fi
+    case "$actual_kind" in
+      Run)   RUN_CMDS+=("$idx:$actual_name") ;;
+      Check) CHECK_CMDS+=("$idx:$actual_name") ;;
+      *)     continue ;;
+    esac
+  done < <(alloy6 commands "$MODEL")
+}
+
+execute_run() {
+  local idx=$1 name=$2
+  echo "  - Executing $name (command #$idx)..."
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  if ! alloy6 exec -c "$idx" -o "$tmpdir" -t json "$MODEL" > /dev/null 2>&1; then
+    echo "    ✗ Failed to execute $name" >&2
+    rm -rf "$tmpdir"
+    return
+  fi
+  local rows
+  rows=$(extract_rows "$tmpdir/receipt.json" "$name")
+  render_table "$name" 2 "$rows"
+  rm -rf "$tmpdir"
+}
+
+execute_check() {
+  local idx=$1 name=$2
+  echo "  - Checking $name for counterexamples (command #$idx)..."
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  if ! alloy6 exec -c "$idx" -o "$tmpdir" -t json "$MODEL" > /dev/null 2>&1; then
+    echo "    ✗ Failed to execute $name" >&2
+    rm -rf "$tmpdir"
+    return
+  fi
+  local solution_count
+  solution_count=$(jq -r --arg cmd "$name" '(.commands[$cmd].solution // []) | length' "$tmpdir/receipt.json")
+  if [[ $solution_count -eq 0 ]]; then
+    rm -rf "$tmpdir"
+    echo "    ✓ No counterexample found"
+    return
+  fi
+  local rows
+  rows=$(extract_rows "$tmpdir/receipt.json" "$name")
+  rm -rf "$tmpdir"
+  counterexamples_written=1
+  render_table "$name" 3 "$rows"
+  echo "    → Counterexample appended to markdown"
+}
+
 RUN_CMDS=()
 CHECK_CMDS=()
-while read -r idx dot kind name _; do
-  [[ $idx =~ ^[0-9]+$ ]] || continue
-  case "$kind" in
-    Run)   RUN_CMDS+=("$idx:$name") ;;
-    Check) CHECK_CMDS+=("$idx:$name") ;;
-    *)     continue ;;
-  esac
-done < <(alloy6 commands "$MODEL")
+collect_commands
 
 if [[ ${#RUN_CMDS[@]} -eq 0 ]]; then
   echo "No Run commands defined in $MODEL" >&2
@@ -75,27 +148,7 @@ trap 'rm -f "$tmpfile"' EXIT
 
 for entry in "${RUN_CMDS[@]}"; do
   IFS=: read -r idx name <<< "$entry"
-  echo "  - Executing $name (command #$idx)..."
-  tmpdir=$(mktemp -d)
-  if ! alloy6 exec -c "$idx" -o "$tmpdir" -t json "$MODEL" > /dev/null 2>&1; then
-    echo "    ✗ Failed to execute $name" >&2
-    rm -rf "$tmpdir"
-    continue
-  fi
-  rows=$(extract_rows "$tmpdir/receipt.json" "$name")
-  {
-    echo "## $name"
-    echo
-    echo "| Step | Status | Event | Assigned To |"
-    echo "|------|--------|-------|-------------|"
-    if [[ -n "$rows" ]]; then
-      printf "%s\n" "$rows"
-    else
-      echo "| - | - | - | - |"
-    fi
-    echo
-  } >> "$tmpfile"
-  rm -rf "$tmpdir"
+  execute_run "$idx" "$name"
 done
 
 if [[ ${#CHECK_CMDS[@]} -gt 0 ]]; then
@@ -105,41 +158,15 @@ if [[ ${#CHECK_CMDS[@]} -gt 0 ]]; then
   counterexamples_written=0
   for entry in "${CHECK_CMDS[@]}"; do
     IFS=: read -r idx name <<< "$entry"
-    echo "  - Checking $name for counterexamples (command #$idx)..."
-    tmpdir=$(mktemp -d)
-    if ! alloy6 exec -c "$idx" -o "$tmpdir" -t json "$MODEL" > /dev/null 2>&1; then
-      echo "    ✗ Failed to execute $name" >&2
-      rm -rf "$tmpdir"
-      continue
-    fi
-    solution_count=$(jq -r --arg cmd "$name" '(.commands[$cmd].solution // []) | length' "$tmpdir/receipt.json")
-    if [[ $solution_count -eq 0 ]]; then
-      rm -rf "$tmpdir"
-      echo "    ✓ No counterexample found"
-      continue
-    fi
-    rows=$(extract_rows "$tmpdir/receipt.json" "$name")
-    rm -rf "$tmpdir"
-    counterexamples_written=1
-    {
-      echo "### $name"
-      echo
-      echo "| Step | Status | Event | Assigned To |"
-      echo "|------|--------|-------|-------------|"
-      if [[ -n "$rows" ]]; then
-        printf "%s\n" "$rows"
-      else
-        echo "| - | - | - | - |"
-      fi
-      echo
-    } >> "$tmpfile"
-    echo "    → Counterexample appended to markdown"
+    execute_check "$idx" "$name"
   done
   if [[ $counterexamples_written -eq 0 ]]; then
-    echo "_No assertion counterexamples found within the explored scope._" >> "$tmpfile"
-    echo >> "$tmpfile"
+    {
+      echo "_No assertion counterexamples found within the explored scope._"
+      echo
+    } >> "$tmpfile"
   fi
 fi
 
 mv "$tmpfile" "$OUTPUT"
-echo "Traces saved to $OUTPUT (including assertion counterexamples when present)"
+echo "Traces saved to $OUTPUT (with assertion counterexamples when present)"
