@@ -17,7 +17,7 @@ test:
 
 trace:
 	@./trace.sh $(MODEL) $(TRACE_FILE)
-	@echo "Markdown trace saved to $(TRACE_FILE)"
+	@echo "Markdown trace (run instances + assertion counterexamples) saved to $(TRACE_FILE)"
 
 diagram:
 	@./diagram.sh
